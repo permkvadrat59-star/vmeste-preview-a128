@@ -212,20 +212,37 @@ function reveal(){
 }
 
 /* ---------- первый экран: стена кадров как в ролике ---------- */
-// Кадры загораются от центра к краям, колонки медленно едут навстречу друг другу, изредка один кадр гаснет и загорается снова.
-// Без анимаций (prefers-reduced-motion) стена сразу горит и стоит.
+// Кадры загораются по очереди от центра к краям, потом стена живёт: кадр гаснет и через пару секунд загорается уже с другим
+// силуэтом (кто-то ушёл, кто-то пришёл), другой коротко моргает. Это смена яркости, а не движение, поэтому работает при любой
+// настройке (10.11, Илья: «чтобы дать живость хиро»). Колонки едут навстречу друг другу, только если движение не выключено в системе.
 function buildWall(){
   const wall = $('wall'); if (!wall) return;
   const hero = wall.parentElement;
-  let anims = [], timer = 0, lastW = innerWidth;
+  let anims = [], tiles = [], seen = true, lastW = innerWidth;
+  const timers = new Set();
+  const later = (fn, ms) => { const id = setTimeout(() => { timers.delete(id); fn(); }, ms); timers.add(id); };
+  const all = k => wall.querySelectorAll(`[data-k="${k}"]`);
+  // моргнул: два коротких провала яркости
+  const flick = (k, at = 0) => [0, 90, 200, 290].forEach((d, i) => later(() => all(k).forEach(el => el.classList.toggle('flick', !(i % 2))), at + d));
+  function life(){
+    later(life, 650 + Math.random() * 900);
+    if (!seen || document.hidden || !tiles.length) return;
+    const t = tiles[Math.floor(Math.random() * tiles.length)];
+    if (Math.random() < .35) return flick(t.k);
+    const els = all(t.k);
+    els.forEach(el => el.classList.add('off'));
+    later(() => {
+      const s = Math.floor(Math.random() * SIL), m = Math.random() < .5;
+      els.forEach(el => { el.querySelector('img').src = silSrc(s); el.classList.toggle('m', m); el.classList.remove('off'); });
+    }, 1100 + Math.random() * 1800);
+  }
   function make(intro){
-    anims.forEach(a => a.cancel()); anims = []; clearInterval(timer);
+    anims.forEach(a => a.cancel()); anims = []; timers.forEach(clearTimeout); timers.clear(); tiles = [];
     const W = hero.clientWidth, H = hero.clientHeight;
     const gap = parseFloat(getComputedStyle(wall).columnGap) || 10;
     const tw = Math.min(214, Math.max(118, innerWidth * .134)), th = tw * 248 / 194, step = th + gap;
     let cols = Math.ceil((W + tw) / (tw + gap)); if (cols % 2 === 0) cols++;
     const rows = Math.ceil(H / step) + 2, cx = (cols - 1) / 2;
-    const tiles = [];
     let html = '';
     for (let c = 0; c < cols; c++) {
       const off = c % 2 ? .5 : 0;
@@ -241,26 +258,22 @@ function buildWall(){
     }
     wall.style.setProperty('--tw', tw + 'px');
     wall.innerHTML = html;
-    const light = (k, on, name = 'on') => wall.querySelectorAll(`[data-k="${k}"]`).forEach(el => el.classList.toggle(name, on));
     if (intro) {
+      // как в ролике: кадры загораются по одному от центра, некоторые при этом моргают, как лампа при включении
       tiles.sort((a, b) => a.d - b.d);
-      const each = 2800 / tiles.length;
-      tiles.forEach((t, i) => setTimeout(() => light(t.k, true), 300 + i * each));
+      const each = 3400 / tiles.length;
+      tiles.forEach((t, i) => later(() => { all(t.k).forEach(el => el.classList.add('on')); if (Math.random() < .22) flick(t.k, 160); }, 300 + i * each));
     }
+    later(life, intro ? 4200 : 1200);
     if (!MOTION) return;
     wall.querySelectorAll('.wall__col').forEach((col, c) => {
       anims.push(col.animate([{ transform: 'translateY(0)' }, { transform: `translateY(${-rows * step}px)` }],
         { duration: (70 + (c % 3) * 16) * 1000, iterations: Infinity, direction: c % 2 ? 'reverse' : 'normal' }));
     });
-    timer = setInterval(() => {
-      if (document.hidden) return;
-      const t = tiles[Math.floor(Math.random() * tiles.length)];
-      light(t.k, true, 'dim'); setTimeout(() => light(t.k, false, 'dim'), 1600);
-    }, 1300);
   }
-  make(MOTION);
+  make(true);
   addEventListener('resize', debounce(() => { if (Math.abs(innerWidth - lastW) > 40) { lastW = innerWidth; make(false); } }, 250));
-  if ('IntersectionObserver' in window) new IntersectionObserver(([e]) => anims.forEach(a => e.isIntersecting ? a.play() : a.pause())).observe(hero);
+  if ('IntersectionObserver' in window) new IntersectionObserver(([e]) => { seen = e.isIntersecting; anims.forEach(a => seen ? a.play() : a.pause()); }).observe(hero);
 }
 
 // «вместе ярче, быстрее, креативнее, круче, масштабнее, смелее»: слова под логотипом сменяются по очереди (10.11, Илья).
@@ -424,8 +437,8 @@ function formatsPage(){
         <span class="fmt__n fat num">0${i + 1}</span>
         <h2 class="fmt__name" id="fm-h${i + 1}">${esc(f.name)}</h2>
         <p class="lead">${esc(f.text)}</p>
-        <p class="fmt__count"><i class="dot"></i>${ev.length ? `${ev.length} ${plural(ev.length, 'встреча', 'встречи', 'встреч')} в афише` : 'Скоро в афише'}</p>
-        <div class="btns">${ev.length ? `<a class="btn" href="calendar.html?f=${encodeURIComponent(f.name)}">Смотреть в афише</a>` : `<a class="btn" href="${SITE.channel}"${ext(SITE.channel)}>Следить в канале</a>`}</div>
+        <div class="btns">${ev.length ? `<a class="btn" href="calendar.html?f=${encodeURIComponent(f.name)}">Смотреть в афише</a>` : `<a class="btn" href="${SITE.channel}"${ext(SITE.channel)}>Следить в канале</a>`}
+          <p class="fmt__count"><i class="dot"></i>${ev.length ? `${ev.length} ${plural(ev.length, 'встреча', 'встречи', 'встреч')} в афише` : 'Скоро в афише'}</p></div>
       </div>
       <div class="fmt__ev">${ev.length ? posterMosaic(ev.slice(0, 3), { teaser: false }) + (ev.length > 3 ? `<a class="more" href="calendar.html?f=${encodeURIComponent(f.name)}">Ещё ${ev.length - 3} в афише ${ARROW}</a>` : '')
         : `<a class="fmt__soon" href="${SITE.channel}"${ext(SITE.channel)}>${sil(i * 3 + 1)}<div><p class="h-s">Даты объявим в канале</p><p>Как только договоримся, встреча появится здесь и в афише.</p></div></a>`}</div>
@@ -596,11 +609,11 @@ function personPage(){
         <p class="kick" style="margin-bottom:18px">${kind}</p>
         <h1 class="pp-name">${esc(p.name)}</h1>
         ${p.position ? `<p class="lead pp-pos">${esc(p.position)}</p>` : ''}
+        ${p.contact ? `<div class="btns pp-cta"><a class="btn" href="${esc(p.contact)}"${ext(p.contact)}>Написать в Телеграм</a></div>` : ''}
         ${p.about ? sec('Коротко', `<div class="prose">${p.about.map(t => `<p>${esc(t)}</p>`).join('')}</div>`) : ''}
         ${p.work ? sec('Чем занимается', `<ul class="ticks">${p.work.map(t => `<li>${esc(t)}</li>`).join('')}</ul>`) : ''}
         ${p.talk ? sec('О чём поговорить', `<div class="prose"><p>${esc(p.talk)}</p></div>`) : ''}
         ${evs.length ? sec('Встречи', evs.map(row).join('')) : ''}
-        ${p.contact ? `<div class="btns" style="margin-top:36px"><a class="btn" href="${esc(p.contact)}"${ext(p.contact)}>Написать в Телеграм</a></div>` : ''}
       </div>
     </section>
     ${others.length ? `<section class="sec--tight pp-more"><div class="wrap"><div class="shead"><h2 class="blk__h">${moreH}</h2><a class="more" href="team.html">${p.role === 'team' ? 'Вся команда' : 'Все люди'} ${ARROW}</a></div></div>
@@ -640,7 +653,7 @@ function postPage(){
   const ev = p.event ? eventById(p.event) : null;
   main.innerHTML = `<section class="phead"><div class="wrap"><a class="back" href="blog.html">${ARROW}Весь блог</a><p class="kick">${esc(p.cat || p.kind)} · ${fmtDate(p.date)}</p>
       <h1 class="ev-title">${esc(p.title)}</h1>${p.lead ? `<p class="lead">${esc(p.lead)}</p>` : ''}</div></section>
-    ${p.image ? `<div class="wrap"><figure><img src="${esc(p.image)}" alt="${esc(p.imageNote || '')}" style="width:100%;aspect-ratio:16/9;object-fit:cover">${p.imageNote ? `<figcaption class="kick" style="margin-top:12px;letter-spacing:.06em">${esc(p.imageNote)}</figcaption>` : ''}</figure></div>` : ''}
+    ${p.image ? `<div class="wrap"><figure><img src="${esc(p.image)}" alt="${esc(p.imageNote || '')}" style="width:100%;aspect-ratio:16/9;max-height:72svh;object-fit:cover">${p.imageNote ? `<figcaption class="kick" style="margin-top:12px;letter-spacing:.06em">${esc(p.imageNote)}</figcaption>` : ''}</figure></div>` : ''}
     <div class="wrap"><section class="blk"><h2 class="blk__h">Текст</h2><div class="prose">${(p.body || []).map(t => `<p>${esc(t)}</p>`).join('')}
       ${ev ? `<p><a class="more" href="${eventUrl(ev)}">${esc(ev.title)} ${ARROW}</a></p>` : ''}</div></section>
     ${p.photos && p.photos.length ? `<section class="blk"><h2 class="blk__h">Кадры</h2><div class="gal">${p.photos.map(x => `<figure><img src="${esc(x.src)}" alt="${esc(x.note || '')}" loading="lazy">${x.note ? `<figcaption>${esc(x.note)}</figcaption>` : ''}</figure>`).join('')}</div></section>` : ''}</div>`;
